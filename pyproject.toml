@@ -1,0 +1,24 @@
+[project]
+name = "personal-harness"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.1.1",
+    "ruff>=0.15.22",
+    "ty>=0.0.60",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"] # style Errors (PEP 8), pyflakes, isort keep imports ordered
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
