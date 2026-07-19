@@ -1,17 +1,31 @@
 import asyncio
+from contextlib import asynccontextmanager
 
+from dbos import DBOS
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from harness.bus import emit, history, subscribe
-from harness.runtime import run_agent
+from harness.db import ensure_schema
+from harness.runtime import agent_workflow
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_schema()
+    DBOS.launch()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# Keep references so background runs aren't garbage-collected mid-execution.
+_running_tasks: set[asyncio.Task] = set()
 
 
 async def run_task(task: str) -> None:
-    # Wrap the run so an uncaught error surfaces as an event instead of vanishing.
     try:
-        await run_agent(task, emit)
+        await agent_workflow(task)
     except Exception as e:
         emit({"type": "workflow.failed", "workflowId": "", "error": str(e)})
 
@@ -47,8 +61,11 @@ async def ws(websocket: WebSocket):
             if msg.get("type") == "submit_task":
                 task = msg.get("input")
                 if task:
-                    # Run the agent in the background (agent -> queue)
-                    asyncio.create_task(run_task(task))
+                    # Run the agent in the background (agent -> queue), keeping a
+                    # reference so the task isn't garbage-collected mid-run.
+                    t = asyncio.create_task(run_task(task))
+                    _running_tasks.add(t)
+                    t.add_done_callback(_running_tasks.discard)
     except WebSocketDisconnect:
         pass
     finally:

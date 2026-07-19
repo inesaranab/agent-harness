@@ -1,9 +1,7 @@
 # harness/runtime.py
-
 import json
-import uuid
-from collections.abc import Callable
 
+from dbos import DBOS, DBOSConfig
 from openai import AsyncOpenAI
 from openai.types.responses import (
     ResponseErrorEvent,
@@ -11,11 +9,13 @@ from openai.types.responses import (
     ResponseOutputItemDoneEvent,
     ResponseTextDeltaEvent,
 )
-from openai.types.responses.response_input_item_param import FunctionCallOutput
 
 from config import settings
+from harness.bus import emit
 from harness.system_prompt import SYSTEM_PROMPT
 from harness.tools import TOOL_SCHEMAS, run_tool
+
+DBOS(config=DBOSConfig(name="ines-harness", system_database_url=settings.database_url))
 
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -23,9 +23,87 @@ client = AsyncOpenAI(api_key=settings.openai_api_key)
 MAX_STEPS = 10
 
 
-async def run_agent(user_input: str, emit: Callable[[dict], None]) -> None:
-    workflow_id = str(uuid.uuid4())
-    emit({"type": "workflow.started", "workflowId": workflow_id, "input": user_input})
+@DBOS.step()
+async def emit_step(event: dict) -> None:
+    emit(event)
+
+
+@DBOS.step()
+async def model_turn(workflow_id: str, messages: list) -> dict:
+    tool_calls = []
+
+    # Stream — we match on the SDK's event CLASSES, not strings.
+    async with client.responses.stream(
+        model="gpt-5.6-luna",
+        input=messages,
+        tools=TOOL_SCHEMAS,
+    ) as stream:
+        async for event in stream:
+            match event:
+                case ResponseTextDeltaEvent():
+                    emit({"type": "model.delta", "workflowId": workflow_id, "text": event.delta})
+                case ResponseOutputItemDoneEvent() if isinstance(
+                    event.item, ResponseFunctionToolCall
+                ):
+                    emit(
+                        {
+                            "type": "tool.requested",
+                            "workflowId": workflow_id,
+                            "toolCallId": event.item.call_id,
+                            "name": event.item.name,
+                            "args": event.item.arguments,
+                        }
+                    )
+                    tool_calls.append(
+                        {
+                            "name": event.item.name,
+                            "arguments": event.item.arguments,
+                            "call_id": event.item.call_id,
+                        }
+                    )
+                case ResponseErrorEvent():
+                    emit(
+                        {
+                            "type": "workflow.failed",
+                            "workflowId": workflow_id,
+                            "error": event.message,
+                        }
+                    )
+                    # Stop the turn instead of falling into get_final_response()
+                    # on an already-errored stream.
+                    raise RuntimeError(event.message)
+        final = await stream.get_final_response()
+
+    # Return only serializable data — DBOS checkpoints this to Postgres.
+    return {
+        "output": [
+            item.model_dump(exclude={"status", "parsed_arguments"}) for item in final.output
+        ],
+        "output_text": final.output_text,
+        "tool_calls": tool_calls,
+    }
+
+
+@DBOS.step()
+async def tool_step(workflow_id: str, call: dict) -> dict:
+    args = json.loads(call["arguments"])
+    result = run_tool(call["name"], args)
+    emit(
+        {
+            "type": "tool.completed",
+            "workflowId": workflow_id,
+            "toolCallId": call["call_id"],
+            "name": call["name"],
+            "result": result,
+        }
+    )
+    return result
+
+
+@DBOS.workflow()
+async def agent_workflow(user_input: str) -> str:
+    workflow_id = DBOS.workflow_id
+    await emit_step({"type": "workflow.started", "workflowId": workflow_id, "input": user_input})
 
     # STATE
     messages: list = [
@@ -36,88 +114,42 @@ async def run_agent(user_input: str, emit: Callable[[dict], None]) -> None:
     # THE LOOP.
     step = 0
     while step < MAX_STEPS:
-        tool_calls = []
-
-        # Stream — we match on the SDK's event CLASSES, not strings.
-        async with client.responses.stream(
-            model="gpt-5.6-luna",
-            input=messages,
-            tools=TOOL_SCHEMAS,
-        ) as stream:
-            async for event in stream:
-                match event:
-                    case ResponseTextDeltaEvent():
-                        emit(
-                            {"type": "model.delta", "workflowId": workflow_id, "text": event.delta}
-                        )
-                    case ResponseOutputItemDoneEvent() if isinstance(
-                        event.item, ResponseFunctionToolCall
-                    ):
-                        emit(
-                            {
-                                "type": "tool.requested",
-                                "toolCallId": event.item.call_id,
-                                "workflowId": workflow_id,
-                                "name": event.item.name,
-                                "args": event.item.arguments,
-                            }
-                        )
-                        tool_calls.append(event.item)
-                    case ResponseErrorEvent():
-                        emit(
-                            {
-                                "type": "workflow.failed",
-                                "workflowId": workflow_id,
-                                "error": event.message,
-                            }
-                        )
-                        return
-
-            final = await stream.get_final_response()
-
+        turn = await model_turn(workflow_id, messages)  # ty: ignore[invalid-argument-type]
         # Append the model's output to history so the next turn sees it.
-        messages += [
-            item.model_dump(exclude={"status", "parsed_arguments"}) for item in final.output
-        ]
+        messages += turn["output"]
 
         # No tool calls means the model answered. We're done.
-        if not tool_calls:
-            emit({"type": "model.completed", "workflowId": workflow_id, "text": final.output_text})
-            emit(
+        if not turn["tool_calls"]:
+            await emit_step(
+                {"type": "model.completed", "workflowId": workflow_id, "text": turn["output_text"]}
+            )
+            await emit_step(
                 {
                     "type": "workflow.completed",
                     "workflowId": workflow_id,
-                    "output": final.output_text,
+                    "output": turn["output_text"],
                 }
             )
-            return
+            return turn["output_text"]
 
         # Run each requested tool with NO mediation, feed the result back.
-        for call in tool_calls:
-            args = json.loads(call.arguments)
-            result = run_tool(call.name, args)
-            emit(
+        for call in turn["tool_calls"]:
+            result = await tool_step(workflow_id, call)  # ty: ignore[invalid-argument-type]
+            messages.append(
                 {
-                    "type": "tool.completed",
-                    "toolCallId": call.call_id,
-                    "workflowId": workflow_id,
-                    "name": call.name,
-                    "result": result,
+                    "type": "function_call_output",
+                    "call_id": call["call_id"],
+                    "output": json.dumps(result),
                 }
             )
-            out: FunctionCallOutput = {
-                "type": "function_call_output",
-                "call_id": call.call_id,
-                "output": json.dumps(result),
-            }
-            messages.append(out)
 
         step += 1
 
-    emit(
+    await emit_step(
         {
             "type": "workflow.failed",
             "workflowId": workflow_id,
             "error": f"Hit the {MAX_STEPS}-step limit.",
         }
     )
+    return ""
