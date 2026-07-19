@@ -8,6 +8,14 @@ from harness.runtime import run_agent
 app = FastAPI()
 
 
+async def run_task(task: str) -> None:
+    # Wrap the run so an uncaught error surfaces as an event instead of vanishing.
+    try:
+        await run_agent(task, emit)
+    except Exception as e:
+        emit({"type": "workflow.failed", "workflowId": "", "error": str(e)})
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     # 1. Accept the browser's connection.
@@ -23,9 +31,12 @@ async def ws(websocket: WebSocket):
 
     # 4. Push queued events to the browser, forever
     async def forward():
-        while True:
-            event = await queue.get()
-            await websocket.send_json(event)
+        try:
+            while True:
+                event = await queue.get()
+                await websocket.send_json(event)
+        except Exception:
+            pass
 
     forward_task = asyncio.create_task(forward())
 
@@ -33,9 +44,11 @@ async def ws(websocket: WebSocket):
     try:
         while True:
             msg = await websocket.receive_json()
-            if msg["type"] == "submit_task":
-                # Run the agent in the background; it reports via emit -> queue.
-                asyncio.create_task(run_agent(msg["input"], emit))
+            if msg.get("type") == "submit_task":
+                task = msg.get("input")
+                if task:
+                    # Run the agent in the background (agent -> queue)
+                    asyncio.create_task(run_task(task))
     except WebSocketDisconnect:
         pass
     finally:

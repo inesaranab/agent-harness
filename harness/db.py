@@ -4,12 +4,7 @@ from sqlmodel import Field, SQLModel, create_engine
 
 from config import settings
 
-connection_string = settings.database_url
-
-if not connection_string:
-    raise Exception("Please set your DATABASE_URL")
-
-db_client = create_engine(connection_string, pool_size=5)
+db_client = create_engine(settings.database_url, pool_size=5)
 
 
 class EventLog(SQLModel, table=True):

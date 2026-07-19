@@ -1,6 +1,7 @@
 # harness/runtime.py
 
 import json
+import uuid
 from collections.abc import Callable
 
 from openai import AsyncOpenAI
@@ -23,7 +24,8 @@ MAX_STEPS = 10
 
 
 async def run_agent(user_input: str, emit: Callable[[dict], None]) -> None:
-    emit({"type": "workflow.started", "input": user_input})
+    workflow_id = str(uuid.uuid4())
+    emit({"type": "workflow.started", "workflowId": workflow_id, "input": user_input})
 
     # STATE
     messages: list = [
@@ -45,20 +47,30 @@ async def run_agent(user_input: str, emit: Callable[[dict], None]) -> None:
             async for event in stream:
                 match event:
                     case ResponseTextDeltaEvent():
-                        emit({"type": "model.delta", "text": event.delta})
+                        emit(
+                            {"type": "model.delta", "workflowId": workflow_id, "text": event.delta}
+                        )
                     case ResponseOutputItemDoneEvent() if isinstance(
                         event.item, ResponseFunctionToolCall
                     ):
                         emit(
                             {
                                 "type": "tool.requested",
+                                "toolCallId": event.item.call_id,
+                                "workflowId": workflow_id,
                                 "name": event.item.name,
                                 "args": event.item.arguments,
                             }
                         )
                         tool_calls.append(event.item)
                     case ResponseErrorEvent():
-                        emit({"type": "workflow.failed", "error": event.message})
+                        emit(
+                            {
+                                "type": "workflow.failed",
+                                "workflowId": workflow_id,
+                                "error": event.message,
+                            }
+                        )
                         return
 
             final = await stream.get_final_response()
@@ -70,15 +82,29 @@ async def run_agent(user_input: str, emit: Callable[[dict], None]) -> None:
 
         # No tool calls means the model answered. We're done.
         if not tool_calls:
-            emit({"type": "model.completed", "text": final.output_text})
-            emit({"type": "workflow.completed", "output": final.output_text})
+            emit({"type": "model.completed", "workflowId": workflow_id, "text": final.output_text})
+            emit(
+                {
+                    "type": "workflow.completed",
+                    "workflowId": workflow_id,
+                    "output": final.output_text,
+                }
+            )
             return
 
         # Run each requested tool with NO mediation, feed the result back.
         for call in tool_calls:
             args = json.loads(call.arguments)
             result = run_tool(call.name, args)
-            emit({"type": "tool.completed", "name": call.name, "result": result})
+            emit(
+                {
+                    "type": "tool.completed",
+                    "toolCallId": call.call_id,
+                    "workflowId": workflow_id,
+                    "name": call.name,
+                    "result": result,
+                }
+            )
             out: FunctionCallOutput = {
                 "type": "function_call_output",
                 "call_id": call.call_id,
@@ -88,4 +114,10 @@ async def run_agent(user_input: str, emit: Callable[[dict], None]) -> None:
 
         step += 1
 
-    emit({"type": "workflow.failed", "error": f"Hit the {MAX_STEPS}-step limit."})
+    emit(
+        {
+            "type": "workflow.failed",
+            "workflowId": workflow_id,
+            "error": f"Hit the {MAX_STEPS}-step limit.",
+        }
+    )
