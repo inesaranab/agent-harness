@@ -90,10 +90,15 @@ TOOL_SCHEMAS: list[FunctionToolParam] = [
 ]
 
 
-# ── the registry (so the loop finds a function by its name) ──────────
+# ── the registry (name → function) ──────────────────────────────────
 TOOLS = {
     "searchKnowledgeBase": search_knowledge_base,
     "classifyItem": classify_item,
     "draftReply": draft_reply,
     "sendReply": send_reply,
 }
+
+
+# ── the single execution entrypoint (his runTool) ───────────────────
+def run_tool(name: str, args: dict) -> dict:
+    return TOOLS[name](**args)
