@@ -25,11 +25,13 @@ _running_tasks: set[asyncio.Task] = set()
 
 
 async def run_task(task: str) -> None:
+    workflow_id = ""
     try:
         handle = await DBOS.start_workflow_async(agent_workflow, task)
+        workflow_id = handle.workflow_id
         await handle.get_result()
     except Exception as e:
-        emit({"type": "workflow.failed", "workflowId": "", "error": str(e)})
+        emit({"type": "workflow.failed", "workflowId": workflow_id, "error": str(e)})
 
 
 @app.websocket("/ws")
