@@ -14,6 +14,7 @@ async def lifespan(app: FastAPI):
     ensure_schema()
     DBOS.launch()
     yield
+    DBOS.destroy()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -25,7 +26,8 @@ _running_tasks: set[asyncio.Task] = set()
 
 async def run_task(task: str) -> None:
     try:
-        await agent_workflow(task)
+        handle = await DBOS.start_workflow_async(agent_workflow, task)
+        await handle.get_result()
     except Exception as e:
         emit({"type": "workflow.failed", "workflowId": "", "error": str(e)})
 
