@@ -1,12 +1,16 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from dbos import DBOS
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 
 from harness.bus import emit, history, subscribe
+from harness.code_mode import call
 from harness.db import ensure_schema
 from harness.runtime import agent_workflow
+
+logger = logging.getLogger("harness.rpc")
 
 
 @asynccontextmanager
@@ -32,6 +36,19 @@ async def run_task(task: str) -> None:
         await handle.get_result()
     except Exception as e:
         emit({"type": "workflow.failed", "workflowId": workflow_id, "error": str(e)})
+
+
+@app.post("/rpc/tool")
+async def rpc_tool(req: Request):
+    try:
+        body = await req.json()
+        return {"result": call(body["token"], body["name"], body["args"])}
+    except PermissionError as e:
+        return {"error": str(e)}
+    except Exception:
+        # Return generic message (no internals)
+        logger.exception("rpc_tool failed")
+        return {"error": "internal error"}
 
 
 @app.websocket("/ws")
