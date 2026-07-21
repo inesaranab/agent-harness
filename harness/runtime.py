@@ -87,7 +87,7 @@ async def model_turn(workflow_id: str, messages: list) -> dict:
 @DBOS.step()
 async def tool_step(workflow_id: str, call: dict) -> dict:
     args = json.loads(call["arguments"])
-    result = run_tool(call["name"], args)
+    result = await run_tool(call["name"], args)
     emit(
         {
             "type": "tool.completed",
