@@ -214,7 +214,7 @@ export function TaskPane({
 
   async function clearMemory() {
     // The route is wired up in the memory lesson; degrade gracefully before then.
-    await fetch(`http://${location.hostname}:8787/api/clear`, { method: "POST" }).catch(() => {});
+    await fetch(`http://${location.hostname}:8787/reset`, { method: "POST" }).catch(() => {});
     location.reload(); // simplest reset: reconnect and replay the now-empty log
   }
 

@@ -4,10 +4,11 @@ from contextlib import asynccontextmanager
 
 from dbos import DBOS
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from sqlalchemy import text
 
 from harness.bus import emit, history, subscribe
 from harness.code_mode import call
-from harness.db import ensure_schema
+from harness.db import db_client, ensure_schema
 from harness.runtime import agent_workflow
 
 logger = logging.getLogger("harness.rpc")
@@ -93,3 +94,10 @@ async def ws(websocket: WebSocket):
         # 6. Clean up when the browser leaves.
         forward_task.cancel()
         unsub()
+
+
+@app.post("/reset")
+def reset():
+    with db_client.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE event_log RESTART IDENTITY"))
+    return {"ok": True}
