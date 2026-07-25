@@ -28,7 +28,8 @@ def _as_text(message: object) -> str:
 # ── estimate: how many tokens a list of messages costs ──────────────
 def estimate_tokens(messages: list) -> int:
     text = "\n".join(_as_text(m) for m in messages)
-    return len(_encoder().encode(text))
+    # encode_ordinary never raises on text that looks like a special token
+    return len(_encoder().encode_ordinary(text))
 
 
 # ── CONTEXT: what the model actually sees THIS turn, assembled fresh ─

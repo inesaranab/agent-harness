@@ -119,13 +119,14 @@ async def agent_workflow(user_input: str) -> str:
 
     step = 0
     while step < MAX_STEPS:
-        # 1. Compact: while the recent window is over budget, peel the oldest
-        #    turns into the running summary (keeping at least the last turn).
-        if estimate_tokens([m for turn in turns for m in turn]) > MAX_CONTEXT_TOKENS:
+        # 1. Compact: while the FULL assembled context (system prompt + task +
+        #    summary + turns) is over budget, peel the oldest turns into the
+        #    running summary (keeping at least the last turn).
+        if estimate_tokens(build_context(user_input, summary, turns)) > MAX_CONTEXT_TOKENS:
             old: list = []
             while (
                 len(turns) > 1
-                and estimate_tokens([m for turn in turns for m in turn]) > KEEP_CONTEXT_TOKENS
+                and estimate_tokens(build_context(user_input, summary, turns)) > KEEP_CONTEXT_TOKENS
             ):
                 old.append(turns.pop(0))
             if old:
