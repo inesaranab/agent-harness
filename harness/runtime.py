@@ -12,15 +12,21 @@ from openai.types.responses import (
 
 from config import settings
 from harness.bus import emit
-from harness.system_prompt import SYSTEM_PROMPT
+from harness.memory import (
+    KEEP_CONTEXT_TOKENS,
+    MAX_CONTEXT_TOKENS,
+    build_context,
+    estimate_tokens,
+    summarize,
+)
 from harness.tools import TOOL_SCHEMAS, run_tool
 
 DBOS(config=DBOSConfig(name="ines-harness", system_database_url=settings.database_url))
 
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
-# Loop guard
-MAX_STEPS = 10
+
+MAX_STEPS = 30
 
 
 @DBOS.step()
@@ -29,13 +35,18 @@ async def emit_step(event: dict) -> None:
 
 
 @DBOS.step()
-async def model_turn(workflow_id: str, messages: list) -> dict:
+async def summarize_step(old_turns: list, prior_summary: str) -> str:
+    return await summarize(old_turns, prior_summary)
+
+
+@DBOS.step()
+async def model_turn(workflow_id: str, context: list) -> dict:
     tool_calls = []
 
-    # Stream — we match on the SDK's event CLASSES, not strings.
+    # One model turn over the HYDRATED context (not the whole history).
     async with client.responses.stream(
         model="gpt-5.6-luna",
-        input=messages,
+        input=context,
         tools=TOOL_SCHEMAS,
     ) as stream:
         async for event in stream:
@@ -69,12 +80,9 @@ async def model_turn(workflow_id: str, messages: list) -> dict:
                             "error": event.message,
                         }
                     )
-                    # Stop the turn instead of falling into get_final_response()
-                    # on an already-errored stream.
                     raise RuntimeError(event.message)
         final = await stream.get_final_response()
 
-    # Return only serializable data — DBOS checkpoints this to Postgres.
     return {
         "output": [
             item.model_dump(exclude={"status", "parsed_arguments"}) for item in final.output
@@ -105,18 +113,40 @@ async def agent_workflow(user_input: str) -> str:
     workflow_id = DBOS.workflow_id
     await emit_step({"type": "workflow.started", "workflowId": workflow_id, "input": user_input})
 
-    # STATE
-    messages: list = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_input},
-    ]
+    # Conversation as a list of TURNS to compact at clean boundaries.
+    turns: list = []
+    summary = ""
 
-    # THE LOOP.
     step = 0
     while step < MAX_STEPS:
-        turn = await model_turn(workflow_id, messages)  # ty: ignore[invalid-argument-type]
-        # Append the model's output to history so the next turn sees it.
-        messages += turn["output"]
+        # 1. Compact: while the FULL assembled context (system prompt + task +
+        #    summary + turns) is over budget, peel the oldest turns into the
+        #    running summary (keeping at least the last turn).
+        if estimate_tokens(build_context(user_input, summary, turns)) > MAX_CONTEXT_TOKENS:
+            old: list = []
+            while (
+                len(turns) > 1
+                and estimate_tokens(build_context(user_input, summary, turns)) > KEEP_CONTEXT_TOKENS
+            ):
+                old.append(turns.pop(0))
+            if old:
+                summary = await summarize_step(old, summary)
+                context_tokens = estimate_tokens(build_context(user_input, summary, turns))
+                await emit_step(
+                    {
+                        "type": "memory.compacted",
+                        "workflowId": workflow_id,
+                        "summarizedTurns": len(old),
+                        "contextTokens": context_tokens,
+                        "summary": summary,
+                    }
+                )
+
+        # 2 + 3. Hydrate the context and run one turn over it.
+        context = build_context(user_input, summary, turns)
+        turn = await model_turn(workflow_id, context)  # ty: ignore[invalid-argument-type]
+
+        turn_messages: list = list(turn["output"])
 
         # No tool calls means the model answered. We're done.
         if not turn["tool_calls"]:
@@ -132,10 +162,10 @@ async def agent_workflow(user_input: str) -> str:
             )
             return turn["output_text"]
 
-        # Run each requested tool with NO mediation, feed the result back.
+        # Run each requested tool, feed the result into THIS turn's messages.
         for call in turn["tool_calls"]:
             result = await tool_step(workflow_id, call)  # ty: ignore[invalid-argument-type]
-            messages.append(
+            turn_messages.append(
                 {
                     "type": "function_call_output",
                     "call_id": call["call_id"],
@@ -143,6 +173,7 @@ async def agent_workflow(user_input: str) -> str:
                 }
             )
 
+        turns.append(turn_messages)
         step += 1
 
     await emit_step(
