@@ -12,6 +12,7 @@ dependencies = [
     "psycopg2-binary>=2.9.12",
     "pydantic-settings>=2.14.2",
     "sqlmodel>=0.0.39",
+    "tiktoken>=0.13.0",
     "uvicorn[standard]>=0.51.0",
 ]
 
