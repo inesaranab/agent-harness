@@ -5,7 +5,6 @@ import tiktoken
 from openai import AsyncOpenAI
 
 from config import settings
-from harness.system_prompt import SYSTEM_PROMPT
 
 # Small on purpose so a short task triggers compaction.
 MAX_CONTEXT_TOKENS = 500
@@ -33,9 +32,9 @@ def estimate_tokens(messages: list) -> int:
 
 
 # ── CONTEXT: what the model actually sees THIS turn, assembled fresh ─
-def build_context(task: str, summary: str, turns: list) -> list:
+def build_context(task: str, summary: str, turns: list, system_prompt: str) -> list:
     context: list = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},  # the goal is pinned, never summarized away
     ]
     if summary:

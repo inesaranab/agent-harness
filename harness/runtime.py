@@ -11,6 +11,7 @@ from openai.types.responses import (
 )
 
 from config import settings
+from harness.agents import REGISTRY, START_AGENT, tool_schema_for
 from harness.bus import emit
 from harness.memory import (
     KEEP_CONTEXT_TOKENS,
@@ -19,7 +20,7 @@ from harness.memory import (
     estimate_tokens,
     summarize,
 )
-from harness.tools import TOOL_SCHEMAS, run_tool
+from harness.tools import run_tool
 
 DBOS(config=DBOSConfig(name="ines-harness", system_database_url=settings.database_url))
 
@@ -40,14 +41,14 @@ async def summarize_step(old_turns: list, prior_summary: str) -> str:
 
 
 @DBOS.step()
-async def model_turn(workflow_id: str, context: list) -> dict:
+async def model_turn(workflow_id: str, context: list, tools: list) -> dict:
     tool_calls = []
 
     # One model turn over the HYDRATED context (not the whole history).
     async with client.responses.stream(
         model="gpt-5.6-luna",
         input=context,
-        tools=TOOL_SCHEMAS,
+        tools=tools,
     ) as stream:
         async for event in stream:
             match event:
@@ -116,22 +117,27 @@ async def agent_workflow(user_input: str) -> str:
     # Conversation as a list of TURNS to compact at clean boundaries.
     turns: list = []
     summary = ""
+    active = START_AGENT  # the active agent right now
 
     step = 0
     while step < MAX_STEPS:
-        # 1. Compact: while the FULL assembled context (system prompt + task +
-        #    summary + turns) is over budget, peel the oldest turns into the
-        #    running summary (keeping at least the last turn).
-        if estimate_tokens(build_context(user_input, summary, turns)) > MAX_CONTEXT_TOKENS:
+        # 1. Compact against THIS agent's assembled context
+        if (
+            estimate_tokens(build_context(user_input, summary, turns, active.system_prompt))
+            > MAX_CONTEXT_TOKENS
+        ):
             old: list = []
             while (
                 len(turns) > 1
-                and estimate_tokens(build_context(user_input, summary, turns)) > KEEP_CONTEXT_TOKENS
+                and estimate_tokens(build_context(user_input, summary, turns, active.system_prompt))
+                > KEEP_CONTEXT_TOKENS
             ):
                 old.append(turns.pop(0))
             if old:
                 summary = await summarize_step(old, summary)
-                context_tokens = estimate_tokens(build_context(user_input, summary, turns))
+                context_tokens = estimate_tokens(
+                    build_context(user_input, summary, turns, active.system_prompt)
+                )
                 await emit_step(
                     {
                         "type": "memory.compacted",
@@ -143,8 +149,8 @@ async def agent_workflow(user_input: str) -> str:
                 )
 
         # 2 + 3. Hydrate the context and run one turn over it.
-        context = build_context(user_input, summary, turns)
-        turn = await model_turn(workflow_id, context)  # ty: ignore[invalid-argument-type]
+        context = build_context(user_input, summary, turns, active.system_prompt)
+        turn = await model_turn(workflow_id, context, tool_schema_for(active))  # ty: ignore[invalid-argument-type]
 
         turn_messages: list = list(turn["output"])
 
@@ -162,9 +168,40 @@ async def agent_workflow(user_input: str) -> str:
             )
             return turn["output_text"]
 
-        # Run each requested tool, feed the result into THIS turn's messages.
+        # Run each requested tool
         for call in turn["tool_calls"]:
-            result = await tool_step(workflow_id, call)  # ty: ignore[invalid-argument-type]
+            if call["name"] == "handoff":
+                try:
+                    args = json.loads(call["arguments"])
+                except json.JSONDecodeError:
+                    args = {}
+                target = args.get("to", "")
+                if target not in REGISTRY:
+                    # Malformed args or unknown target: fail this tool call
+                    result: dict = {
+                        "ok": False,
+                        "error": f"Unknown handoff target {target!r}. "
+                        f"Valid targets: {list(REGISTRY)}.",
+                    }
+                else:
+                    await emit_step(
+                        {
+                            "type": "agent.handoff",
+                            "workflowId": workflow_id,
+                            "from": active.name,
+                            "to": target,
+                            "reason": args.get("reason", ""),
+                        }
+                    )
+                    active = REGISTRY[target]
+                    result = {
+                        "ok": True,
+                        "message": f"You are now the {target} specialist. Take over "
+                        "and FINISH the task by calling the tools you need — do the "
+                        "work, don't just acknowledge the handoff.",
+                    }
+            else:
+                result = await tool_step(workflow_id, call)  # ty: ignore[invalid-argument-type]
             turn_messages.append(
                 {
                     "type": "function_call_output",
