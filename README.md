@@ -4,6 +4,14 @@ An event-driven agent runtime: a durable ReAct loop with memory compaction and
 multi-agent **handoffs**, plus a live inspector that renders every event the
 harness emits.
 
+![Python](https://img.shields.io/badge/python-3.14-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688)
+![DBOS](https://img.shields.io/badge/DBOS-durable-4c8b2b)
+![Postgres](https://img.shields.io/badge/postgres-Neon-4c8b2b)
+![OpenAI](https://img.shields.io/badge/OpenAI-Responses-4c8b2b)
+![Agents](https://img.shields.io/badge/agents-handoff%20%2B%20supervisor-4c8b2b)
+![Frontend](https://img.shields.io/badge/frontend-React%20%2B%20Vite-4c8b2b)
+
 
 ## Demo
 
