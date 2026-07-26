@@ -171,24 +171,35 @@ async def agent_workflow(user_input: str) -> str:
         # Run each requested tool
         for call in turn["tool_calls"]:
             if call["name"] == "handoff":
-                args = json.loads(call["arguments"])
+                try:
+                    args = json.loads(call["arguments"])
+                except json.JSONDecodeError:
+                    args = {}
                 target = args.get("to", "")
-                await emit_step(
-                    {
-                        "type": "agent.handoff",
-                        "workflowId": workflow_id,
-                        "from": active.name,
-                        "to": target,
-                        "reason": args.get("reason", ""),
+                if target not in REGISTRY:
+                    # Malformed args or unknown target: fail this tool call
+                    result: dict = {
+                        "ok": False,
+                        "error": f"Unknown handoff target {target!r}. "
+                        f"Valid targets: {list(REGISTRY)}.",
                     }
-                )
-                active = REGISTRY[target]
-                result: dict = {
-                    "ok": True,
-                    "message": f"You are now the {target} specialist. Take over and "
-                    "FINISH the task by callling the tools you need - do the work, "
-                    "don't just acknowledge the handoof.",
-                }
+                else:
+                    await emit_step(
+                        {
+                            "type": "agent.handoff",
+                            "workflowId": workflow_id,
+                            "from": active.name,
+                            "to": target,
+                            "reason": args.get("reason", ""),
+                        }
+                    )
+                    active = REGISTRY[target]
+                    result = {
+                        "ok": True,
+                        "message": f"You are now the {target} specialist. Take over "
+                        "and FINISH the task by calling the tools you need — do the "
+                        "work, don't just acknowledge the handoff.",
+                    }
             else:
                 result = await tool_step(workflow_id, call)  # ty: ignore[invalid-argument-type]
             turn_messages.append(
