@@ -10,6 +10,7 @@ from harness.investigators import run_investigator
 from harness.runtime import client, emit_step  # reuse both; also forces DBOS() first
 
 MODEL = "gpt-5.6-luna"
+MAX_PLAN_STEPS = 6  # cap concurrent investigators — steps come from model output
 
 
 # The PLAN is a first-class artifact: a structured object the supervisor emits,
@@ -95,6 +96,9 @@ async def supervisor_workflow(task: str) -> str:
     await emit_step({"type": "plan.created", "workflowId": workflow_id, "steps": steps})
 
     # DISPATCH — every sub-agent runs in parallel, each in its own context window.
+    # `steps` is untrusted model output; cap it so a degenerate plan can't spawn
+    # unbounded concurrent investigators (each up to MAX_STEPS model calls).
+    steps = steps[:MAX_PLAN_STEPS]
     results = await asyncio.gather(
         *(investigate_step(step, workflow_id) for step in steps),
         return_exceptions=True,

@@ -15,8 +15,7 @@ MAX_STEPS = 5
 # Reuse the shared schema
 _SEARCH_KB = next(s for s in TOOL_SCHEMAS if s["name"] == "searchKnowledgeBase")
 
-# getCharges has NO shared schema on purpose — the main agent reaches charges via
-# the sandbox (runCode), not a direct tool. Defining it here keeps it inside the
+# getCharges has NO shared schema on purpose - defining it here keeps it inside the
 # read-only investigator subsystem instead of widening the main agent's surface.
 _GET_CHARGES: FunctionToolParam = {
     "type": "function",
@@ -30,13 +29,10 @@ _GET_CHARGES: FunctionToolParam = {
     },
 }
 
-# name -> how to actually run it. Local too: run_tool intentionally can't reach
-# getCharges, and these are read-only so a re-run on recovery is safe.
 _TOOL_FNS = {
-    "getCharges": lambda a: get_charges(
-        a["customerId"]
-    ),  # call.arguments == '{"customerId": "cus_88121"}' #noqa
-    "searchKnowledgeBase": lambda a: search_knowledge_base(a["query"]),
+    # call.arguments == '{"customerId": "cus_88121"}'
+    "getCharges": lambda a: get_charges(a.get("customerId", "")),
+    "searchKnowledgeBase": lambda a: search_knowledge_base(a.get("query", "")),
 }
 
 
@@ -75,8 +71,6 @@ async def run_investigator(agent: str, objective: str):
 
     # Turn 1 is a plain inference: system via `instructions`, objective via `input`.
     input_items: str | list = objective
-    resp = None
-
     for _ in range(MAX_STEPS):
         resp = await client.responses.create(
             model=MODEL,
@@ -101,4 +95,7 @@ async def run_investigator(agent: str, objective: str):
                     "output": json.dumps(result),
                 }
             )
-    return resp.output_text if resp else ""
+    # Exhausted MAX_STEPS with the model still calling tools. Raise so the
+    # supervisor's fan-in records subagent.failed instead of a fake-successful
+    # empty finding (which would make synthesis say "still pending").
+    raise RuntimeError(f"investigator {agent!r} hit the {MAX_STEPS}-step limit")
