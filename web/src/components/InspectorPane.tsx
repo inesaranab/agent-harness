@@ -9,7 +9,15 @@ const groupColor: Record<string, string> = {
   workflow: "text-violet-600",
   model: "text-sky-600",
   tool: "text-emerald-600",
+  agent: "text-rose-600",
   log: "text-amber-600",
+};
+
+// One emoji per agent so a handoff reads at a glance.
+const agentEmoji: Record<string, string> = {
+  triage: "🧭",
+  billing: "💳",
+  bug: "🐞",
 };
 
 export function InspectorPane({ events }: { events: AgentEvent[] }) {
@@ -27,27 +35,52 @@ export function InspectorPane({ events }: { events: AgentEvent[] }) {
             Waiting for the harness to emit events…
           </li>
         )}
-        {events.map((ev) => (
-          <li
-            key={ev.id}
-            className="hover:bg-muted/50 flex items-start gap-2 rounded px-2 py-1"
-          >
-            <span className="text-muted-foreground shrink-0 tabular-nums">
-              {formatTime(ev.ts)}
-            </span>
-            <span
-              className={cn(
-                "shrink-0 font-medium",
-                groupColor[ev.type.split(".")[0]] ?? "text-foreground",
-              )}
+        {events.map((ev) =>
+          ev.type === "agent.handoff" ? (
+            <li
+              key={ev.id}
+              className="hover:bg-muted/50 flex items-center gap-2 rounded px-2 py-1.5"
             >
-              {ev.type}
-            </span>
-            <span className="text-muted-foreground min-w-0 flex-1 break-all">
-              {summarize(ev)}
-            </span>
-          </li>
-        ))}
+              <span className="text-muted-foreground shrink-0 tabular-nums">
+                {formatTime(ev.ts)}
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-rose-50 px-2 py-0.5 font-medium text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                <span>
+                  {agentEmoji[ev.from] ?? "🤖"} {ev.from}
+                </span>
+                <span aria-hidden>→</span>
+                <span>
+                  {agentEmoji[ev.to] ?? "🤖"} {ev.to}
+                </span>
+              </span>
+              {ev.reason && (
+                <span className="text-muted-foreground min-w-0 flex-1 truncate">
+                  {ev.reason}
+                </span>
+              )}
+            </li>
+          ) : (
+            <li
+              key={ev.id}
+              className="hover:bg-muted/50 flex items-start gap-2 rounded px-2 py-1"
+            >
+              <span className="text-muted-foreground shrink-0 tabular-nums">
+                {formatTime(ev.ts)}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 font-medium",
+                  groupColor[ev.type.split(".")[0]] ?? "text-foreground",
+                )}
+              >
+                {ev.type}
+              </span>
+              <span className="text-muted-foreground min-w-0 flex-1 break-all">
+                {summarize(ev)}
+              </span>
+            </li>
+          ),
+        )}
       </ol>
     </section>
   );

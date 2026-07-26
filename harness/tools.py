@@ -43,8 +43,47 @@ def get_charges(customer_id: str) -> list:
     return CHARGES.get(customer_id, [])
 
 
+def issue_refund(customerId: str, chargeId: str, amountCents: int) -> dict:
+    # IRREVERSIBLE: moves real money. The capability triage lacks.
+    return {
+        "refunded": True,
+        "customerId": customerId,
+        "chargeId": chargeId,
+        "amountCents": amountCents,
+    }
+
+
 # ── the schemas (what the model reads to decide what to call) ────────
 TOOL_SCHEMAS: list[FunctionToolParam] = [
+    {
+        "type": "function",
+        "strict": False,
+        "name": "issueRefund",
+        "description": "Issue a refund. IRREVERSIBLE - moves real money",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "customerId": {"type": "string"},
+                "chargeId": {"type": "string"},
+                "amountCents": {"type": "integer"},
+            },
+            "required": ["customerId", "chargeId", "amountCents"],
+        },
+    },
+    {
+        "type": "function",
+        "strict": False,
+        "name": "handoff",
+        "description": "Hand off to a specialist agent when the task needs a capability you don't have (e.g. issuing a refund -> billing).",  # noqa: E501
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "enum": ["billing"]},
+                "reason": {"type": "string"},
+            },
+            "required": ["to", "reason"],
+        },
+    },
     {
         "type": "function",
         "strict": False,
@@ -121,6 +160,7 @@ TOOLS = {
     "classifyItem": classify_item,
     "draftReply": draft_reply,
     "sendReply": send_reply,
+    "issueRefund": issue_refund,
 }
 
 # for code mode
