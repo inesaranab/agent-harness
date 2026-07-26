@@ -14,3 +14,14 @@ compaction, and the handoff itself — renders live in the inspector on the righ
 
 https://github.com/user-attachments/assets/87b7c105-ddb6-4ca3-81af-6efeb6446b15
 
+ Toggle Supervised and the harness plans first: it decomposes the escalation into independent sub-tasks, dispatches a specialist investigator for each in parallel, then synthesizes their findings into one reply. The plan and every sub-agent — running, done, or failed — render live in the inspector on the right.
+
+ 
+https://github.com/user-attachments/assets/8897b7a8-c21c-41c0-8024-d57ccf834ccd
+
+
+
+
+
+
+
