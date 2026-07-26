@@ -10,6 +10,7 @@ from harness.bus import emit, history, subscribe
 from harness.code_mode import call
 from harness.db import db_client, ensure_schema
 from harness.runtime import agent_workflow
+from harness.supervisor import supervisor_workflow
 
 logger = logging.getLogger("harness.rpc")
 
@@ -29,10 +30,13 @@ app = FastAPI(lifespan=lifespan)
 _running_tasks: set[asyncio.Task] = set()
 
 
-async def run_task(task: str) -> None:
+async def run_task(task: str, mode: str = "default") -> None:
     workflow_id = ""
     try:
-        handle = await DBOS.start_workflow_async(agent_workflow, task)
+        if mode == "supervised":
+            handle = await DBOS.start_workflow_async(supervisor_workflow, task)
+        else:
+            handle = await DBOS.start_workflow_async(agent_workflow, task)
         workflow_id = handle.workflow_id
         await handle.get_result()
     except Exception as e:
@@ -83,9 +87,10 @@ async def ws(websocket: WebSocket):
             if msg.get("type") == "submit_task":
                 task = msg.get("input")
                 if task:
+                    mode = msg.get("mode", "default")
                     # Run the agent in the background (agent -> queue), keeping a
                     # reference so the task isn't garbage-collected mid-run.
-                    t = asyncio.create_task(run_task(task))
+                    t = asyncio.create_task(run_task(task, mode))
                     _running_tasks.add(t)
                     t.add_done_callback(_running_tasks.discard)
     except WebSocketDisconnect:
